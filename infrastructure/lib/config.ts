@@ -54,8 +54,6 @@ export interface InferenceApiConfig {
   // Environment variables for runtime container
   logLevel: string;
   corsOrigins: string;
-  tavilyApiKey: string;
-  novaActApiKey: string;
 }
 
 export interface GatewayConfig {
@@ -174,8 +172,6 @@ export function loadConfig(scope: cdk.App): AppConfig {
       // Environment variables from GitHub Secrets/Variables with context fallback
       logLevel: process.env.ENV_INFERENCE_API_LOG_LEVEL || scope.node.tryGetContext('inferenceApi')?.logLevel,
       corsOrigins: process.env.ENV_INFERENCE_API_CORS_ORIGINS || scope.node.tryGetContext('inferenceApi')?.corsOrigins,
-      tavilyApiKey: process.env.ENV_INFERENCE_API_TAVILY_API_KEY || scope.node.tryGetContext('inferenceApi')?.tavilyApiKey,
-      novaActApiKey: process.env.ENV_INFERENCE_API_NOVA_ACT_API_KEY || scope.node.tryGetContext('inferenceApi')?.novaActApiKey,
     },
     gateway: {
       enabled: parseBooleanEnv(process.env.CDK_GATEWAY_ENABLED) ?? scope.node.tryGetContext('gateway')?.enabled,
@@ -476,6 +472,29 @@ export function getResourceName(config: AppConfig, ...parts: string[]): string {
   const allParts = [config.projectPrefix, ...parts];
   return allParts.join('-');
 }
+/**
+ * Generate a standardized resource name, truncated to a maximum length.
+ * Truncates the prefix (left side) to fit within the limit while keeping
+ * the suffix parts intact, since they carry the semantic meaning.
+ *
+ * @param maxLength Maximum allowed character length for the name
+ */
+export function getTruncatedResourceName(config: AppConfig, maxLength: number, ...parts: string[]): string {
+  const fullName = getResourceName(config, ...parts);
+  if (fullName.length <= maxLength) {
+    return fullName;
+  }
+  // Keep suffix intact, truncate the prefix
+  const suffix = parts.join('-');
+  const available = maxLength - suffix.length - 1; // -1 for the joining hyphen
+  if (available < 1) {
+    // Suffix alone exceeds limit — just hard-truncate
+    return fullName.slice(0, maxLength);
+  }
+  const truncatedPrefix = config.projectPrefix.slice(0, available);
+  return `${truncatedPrefix}-${suffix}`;
+}
+
 
 /**
  * Get the removal policy based on retention configuration

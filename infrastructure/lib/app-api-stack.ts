@@ -1116,11 +1116,13 @@ export class AppApiStack extends cdk.Stack {
           "bedrock-agentcore:CreateAgentRuntime",
           "bedrock-agentcore:CreateAgentRuntimeEndpoint",
           "bedrock-agentcore:CreateWorkloadIdentity",
+          "bedrock-agentcore:DeleteWorkloadIdentity",
           "bedrock-agentcore:UpdateAgentRuntime",
           "bedrock-agentcore:DeleteAgentRuntime",
           "bedrock-agentcore:DeleteAgentRuntimeEndpoint",
           "bedrock-agentcore:GetAgentRuntime",
           "bedrock-agentcore:ListAgentRuntimeEndpoints",
+          "bedrock-agentcore:AllowVendedLogDeliveryForResource",
         ],
         resources: ["*"], // Runtime ARNs are not known at deployment time
       })
@@ -1184,6 +1186,48 @@ export class AppApiStack extends cdk.Stack {
           "ecr:GetAuthorizationToken",
         ],
         resources: ["*"], // ECR authorization token requires wildcard
+      })
+    );
+
+    // Grant CloudWatch Logs delivery permissions for runtime observability
+    // The Lambda sets up vended log deliveries (APPLICATION_LOGS + TRACES) after creating runtimes
+    runtimeProvisionerFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: "CloudWatchLogsDeliveryManagement",
+        effect: iam.Effect.ALLOW,
+        actions: [
+          "logs:PutDeliverySource",
+          "logs:PutDeliveryDestination",
+          "logs:CreateDelivery",
+          "logs:DeleteDeliverySource",
+          "logs:DeleteDeliveryDestination",
+          "logs:DeleteDelivery",
+          "logs:GetDelivery",
+          "logs:GetDeliverySource",
+          "logs:GetDeliveryDestination",
+          "logs:DescribeDeliveries",
+          "logs:DescribeDeliverySources",
+          "logs:DescribeDeliveryDestinations",
+          "logs:CreateLogGroup",
+          "logs:DescribeLogGroups",
+        ],
+        resources: ["*"],
+      })
+    );
+
+    // Grant X-Ray resource policy permissions for TRACES delivery destinations
+    // Required so the Lambda can create X-Ray delivery destinations and auto-create
+    // the X-Ray resource policy that allows delivery.logs.amazonaws.com to write traces
+    runtimeProvisionerFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: "XRayResourcePolicyManagement",
+        effect: iam.Effect.ALLOW,
+        actions: [
+          "xray:PutResourcePolicy",
+          "xray:ListResourcePolicies",
+          "xray:GetTraceSegmentDestination",
+        ],
+        resources: ["*"],
       })
     );
 
@@ -1455,6 +1499,12 @@ export class AppApiStack extends cdk.Stack {
     // ============================================================
     // CloudFormation Outputs
     // ============================================================
+    new cdk.CfnOutput(this, "EcsClusterName", {
+      value: ecsClusterName,
+      description: "ECS Cluster Name",
+      exportName: `${config.projectPrefix}-AppEcsClusterName`,
+    });
+
     new cdk.CfnOutput(this, "EcsServiceName", {
       value: this.ecsService.serviceName,
       description: "ECS Service Name",

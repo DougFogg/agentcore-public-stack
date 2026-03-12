@@ -2,8 +2,10 @@ import { TestBed } from '@angular/core/testing';
 import { HttpRequest, HttpResponse, HttpErrorResponse, HttpHandlerFn } from '@angular/common/http';
 import { authInterceptor } from './auth.interceptor';
 import { AuthService } from './auth.service';
+import { ConfigService } from '../services/config.service';
+import { signal } from '@angular/core';
 import { of, throwError } from 'rxjs';
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 describe('authInterceptor', () => {
   let authService: {
@@ -13,14 +15,20 @@ describe('authInterceptor', () => {
     clearTokens: ReturnType<typeof vi.fn>;
   };
 
+  let configService: { appApiUrl: ReturnType<typeof signal<string>> };
   let next: HttpHandlerFn;
 
   beforeEach(() => {
+    TestBed.resetTestingModule();
     authService = {
       getAccessToken: vi.fn(),
       isTokenExpired: vi.fn(),
       refreshAccessToken: vi.fn(),
       clearTokens: vi.fn(),
+    };
+
+    configService = {
+      appApiUrl: signal('http://localhost:8000'),
     };
 
     next = vi.fn((req: HttpRequest<unknown>) =>
@@ -30,8 +38,13 @@ describe('authInterceptor', () => {
     TestBed.configureTestingModule({
       providers: [
         { provide: AuthService, useValue: authService },
+        { provide: ConfigService, useValue: configService },
       ],
     });
+  });
+
+  afterEach(() => {
+    TestBed.resetTestingModule();
   });
 
   /**
@@ -244,5 +257,45 @@ describe('authInterceptor', () => {
         });
       });
     });
+  });
+
+  /**
+   * Validates: Issue #24 fix
+   * Skips token refresh when config is not loaded (appApiUrl is empty)
+   */
+  it('should skip token refresh when appApiUrl is empty (config not loaded)', () => {
+    configService.appApiUrl.set('');
+    authService.getAccessToken.mockReturnValue('expired-token');
+    authService.isTokenExpired.mockReturnValue(true);
+
+    const req = new HttpRequest('GET', 'http://localhost:8000/api/sessions');
+
+    TestBed.runInInjectionContext(() => {
+      authInterceptor(req, next);
+    });
+
+    expect(authService.refreshAccessToken).not.toHaveBeenCalled();
+    // Request should pass through without auth header
+    const passedReq = (next as ReturnType<typeof vi.fn>).mock.calls[0][0] as HttpRequest<unknown>;
+    expect(passedReq.headers.has('Authorization')).toBe(false);
+  });
+
+  /**
+   * Validates: Issue #24 fix
+   * Skips auth processing for /config.json requests
+   */
+  it('should skip auth processing for /config.json requests', () => {
+    authService.getAccessToken.mockReturnValue('my-token');
+    authService.isTokenExpired.mockReturnValue(true);
+
+    const req = new HttpRequest('GET', '/config.json');
+
+    TestBed.runInInjectionContext(() => {
+      authInterceptor(req, next);
+    });
+
+    expect(authService.refreshAccessToken).not.toHaveBeenCalled();
+    const passedReq = (next as ReturnType<typeof vi.fn>).mock.calls[0][0] as HttpRequest<unknown>;
+    expect(passedReq.headers.has('Authorization')).toBe(false);
   });
 });

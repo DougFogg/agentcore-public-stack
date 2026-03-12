@@ -238,9 +238,9 @@ def seed_default_quota_tier(
         "PK": pk,
         "SK": sk,
         "tierId": "default",
-        "tierName": "Default Tier",
+        "tierName": "Default",
         "description": "Default quota tier for all users",
-        "monthlyCostLimit": Decimal("50.00"),
+        "monthlyCostLimit": Decimal("5.0"),
         "periodType": "monthly",
         "softLimitPercentage": Decimal("80.0"),
         "actionOnLimit": "block",
@@ -327,12 +327,12 @@ def seed_default_quota_assignment(
 # Default Bedrock models to seed
 DEFAULT_MODELS: list[dict[str, Any]] = [
     {
-        "modelId": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "modelId": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
         "modelName": "Claude Haiku 4.5",
         "provider": "bedrock",
-        "providerName": "Amazon Bedrock",
-        "inputModalities": ["text", "image"],
-        "outputModalities": ["text"],
+        "providerName": "Anthropic",
+        "inputModalities": ["TEXT", "IMAGE"],
+        "outputModalities": ["TEXT"],
         "maxInputTokens": 200000,
         "maxOutputTokens": 64000,
         "inputPricePerMillionTokens": Decimal("1.00"),
@@ -344,12 +344,12 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "isDefault": True,
     },
     {
-        "modelId": "us.anthropic.claude-sonnet-4-6",
+        "modelId": "global.anthropic.claude-sonnet-4-6",
         "modelName": "Claude Sonnet 4.6",
         "provider": "bedrock",
-        "providerName": "Amazon Bedrock",
-        "inputModalities": ["text", "image"],
-        "outputModalities": ["text"],
+        "providerName": "Anthropic",
+        "inputModalities": ["TEXT", "IMAGE"],
+        "outputModalities": ["TEXT"],
         "maxInputTokens": 200000,
         "maxOutputTokens": 64000,
         "inputPricePerMillionTokens": Decimal("3.00"),
@@ -436,6 +436,193 @@ def seed_default_models(
             result.details.append(msg)
         except ClientError as e:
             msg = f"Failed to write model '{model_id}': {e}"
+            logger.error(msg)
+            result.failed += 1
+            result.details.append(msg)
+
+    return result
+
+
+DEFAULT_TOOLS: list[dict[str, Any]] = [
+    {
+        "toolId": "fetch_url_content",
+        "displayName": "URL Fetcher",
+        "description": "Fetch and extract text content from web pages, job descriptions, articles, and documentation.",
+        "category": "search",
+        "protocol": "local",
+        "enabledByDefault": True,
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+    {
+        "toolId": "create_visualization",
+        "displayName": "Charts & Graphs",
+        "description": "Create interactive bar, line, and pie charts from data.",
+        "category": "data",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+]
+
+
+def seed_system_admin_role(
+    table_name: str,
+    region: str,
+) -> SeedResult:
+    """Seed the system_admin role with DEFINITION, MODEL_GRANT#*, and TOOL_GRANT#*.
+
+    This runs unconditionally (no JWT role required). The JWT mapping
+    is handled separately by seed_system_admin_jwt_roles.
+    """
+    result = SeedResult(category="system_admin_role")
+    session = boto3.Session(region_name=region)
+    dynamodb = session.resource("dynamodb")
+    table = dynamodb.Table(table_name)
+
+    role_id = "system_admin"
+    pk = f"ROLE#{role_id}"
+
+    try:
+        existing = table.get_item(Key={"PK": pk, "SK": "DEFINITION"})
+        if "Item" in existing:
+            msg = "system_admin role already exists — skipped"
+            logger.info(msg)
+            result.skipped = 1
+            result.details.append(msg)
+            return result
+    except ClientError as e:
+        msg = f"Failed to check existing system_admin role: {e}"
+        logger.error(msg)
+        result.failed = 1
+        result.details.append(msg)
+        return result
+
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    definition_item: dict[str, Any] = {
+        "PK": pk,
+        "SK": "DEFINITION",
+        "roleId": role_id,
+        "displayName": "System Administrator",
+        "description": "Full access to all system features. This role cannot be deleted.",
+        "jwtRoleMappings": [],
+        "inheritsFrom": [],
+        "grantedTools": ["*"],
+        "grantedModels": ["*"],
+        "effectivePermissions": {
+            "tools": ["*"],
+            "models": ["*"],
+            "quotaTier": None,
+        },
+        "priority": 1000,
+        "isSystemRole": True,
+        "enabled": True,
+        "createdAt": now,
+        "updatedAt": now,
+        "createdBy": "bootstrap-seed",
+    }
+
+    tool_grant_item = {
+        "PK": pk,
+        "SK": "TOOL_GRANT#*",
+        "GSI2PK": "TOOL#*",
+        "GSI2SK": pk,
+        "roleId": role_id,
+        "displayName": "System Administrator",
+        "enabled": True,
+    }
+
+    model_grant_item = {
+        "PK": pk,
+        "SK": "MODEL_GRANT#*",
+        "GSI3PK": "MODEL#*",
+        "GSI3SK": pk,
+        "roleId": role_id,
+        "displayName": "System Administrator",
+        "enabled": True,
+    }
+
+    try:
+        client = session.client("dynamodb")
+        client.transact_write_items(
+            TransactItems=[
+                {"Put": {"TableName": table_name, "Item": _serialize(definition_item)}},
+                {"Put": {"TableName": table_name, "Item": _serialize(tool_grant_item)}},
+                {"Put": {"TableName": table_name, "Item": _serialize(model_grant_item)}},
+            ]
+        )
+        result.created = 1
+        result.details.append("system_admin role created with TOOL_GRANT#* and MODEL_GRANT#*")
+    except ClientError as e:
+        msg = f"Failed to create system_admin role: {e}"
+        logger.error(msg)
+        result.failed = 1
+        result.details.append(msg)
+
+    return result
+
+
+def seed_default_tools(
+    table_name: str,
+    region: str,
+) -> SeedResult:
+    """Seed default tool registrations into the app-roles table."""
+    result = SeedResult(category="tool")
+    session = boto3.Session(region_name=region)
+    dynamodb = session.resource("dynamodb")
+    table = dynamodb.Table(table_name)
+
+    for tool_def in DEFAULT_TOOLS:
+        tool_id = tool_def["toolId"]
+        pk = f"TOOL#{tool_id}"
+        sk = "METADATA"
+
+        try:
+            existing = table.get_item(Key={"PK": pk, "SK": sk})
+            if "Item" in existing:
+                msg = f"Tool '{tool_def['displayName']}' ({tool_id}) already exists — skipped"
+                logger.info(msg)
+                result.skipped += 1
+                result.details.append(msg)
+                continue
+        except ClientError as e:
+            msg = f"Failed to check existing tool '{tool_id}': {e}"
+            logger.error(msg)
+            result.failed += 1
+            result.details.append(msg)
+            continue
+
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        item: dict[str, Any] = {
+            "PK": pk,
+            "SK": sk,
+            "GSI1PK": f"CATEGORY#{tool_def['category']}",
+            "GSI1SK": pk,
+            "toolId": tool_id,
+            "displayName": tool_def["displayName"],
+            "description": tool_def["description"],
+            "category": tool_def["category"],
+            "protocol": tool_def["protocol"],
+            "status": "active",
+            "enabledByDefault": tool_def["enabledByDefault"],
+            "isPublic": tool_def["isPublic"],
+            "forwardAuthToken": tool_def["forwardAuthToken"],
+            "createdAt": now,
+            "updatedAt": now,
+            "createdBy": "bootstrap-seed",
+        }
+
+        try:
+            table.put_item(Item=item)
+            msg = f"Tool '{tool_def['displayName']}' ({tool_id}) created"
+            logger.info(msg)
+            result.created += 1
+            result.details.append(msg)
+        except ClientError as e:
+            msg = f"Failed to write tool '{tool_id}': {e}"
             logger.error(msg)
             result.failed += 1
             result.details.append(msg)
@@ -723,6 +910,12 @@ def main() -> None:
 
     # --- Model seeding ---
     results.append(seed_default_models(table_name=models_table, region=region))
+
+    # --- System admin role seeding ---
+    results.append(seed_system_admin_role(table_name=app_roles_table, region=region))
+
+    # --- Tool seeding ---
+    results.append(seed_default_tools(table_name=app_roles_table, region=region))
 
     # --- System admin JWT role seeding ---
     admin_jwt_role = os.environ.get("SEED_ADMIN_JWT_ROLE", "")

@@ -184,8 +184,11 @@ async def get_current_user_trusted(
         HTTPException:
             - 401 if token is missing or malformed
     """
+    logger.debug("[get_current_user_trusted] Trusted auth extraction started")
+
     # Check if credentials are missing
     if credentials is None:
+        logger.debug("[get_current_user_trusted] No credentials provided - returning 401")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required. Please provide a valid Bearer token in the Authorization header.",
@@ -197,12 +200,14 @@ async def get_current_user_trusted(
     try:
         # Decode JWT without verification (network layer already validated it)
         payload = jwt.decode(token, options={"verify_signature": False})
+        logger.debug("[get_current_user_trusted] JWT decoded successfully")
 
         # Resolve provider for claim mappings
         generic_validator = _get_generic_validator()
         if generic_validator:
             try:
                 provider = await generic_validator.resolve_provider_from_token(token)
+                logger.debug(f"[get_current_user_trusted] Provider resolved: {provider.provider_id if provider else 'None'}")
                 if provider:
                     # Use provider-specific claim extraction
                     # Fall back to common OIDC claims if primary claim is absent
@@ -216,6 +221,8 @@ async def get_current_user_trusted(
                     roles = payload.get(provider.roles_claim, [])
                     picture = payload.get(provider.picture_claim) if provider.picture_claim else None
 
+                    logger.debug("[get_current_user_trusted] Claims extracted from token")
+
                     if not name and provider.first_name_claim and provider.last_name_claim:
                         first = payload.get(provider.first_name_claim, "")
                         last = payload.get(provider.last_name_claim, "")
@@ -225,6 +232,7 @@ async def get_current_user_trusted(
                         roles = [roles]
 
                     if not user_id:
+                        logger.error("[get_current_user_trusted] Required user_id claim is missing/empty in token - returning 401")
                         raise HTTPException(
                             status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="Invalid user."
@@ -239,22 +247,28 @@ async def get_current_user_trusted(
                         raw_token=token,
                     )
 
+                    logger.debug("[get_current_user_trusted] User authenticated successfully via provider path")
+
                     sync_service = _get_user_sync_service()
                     if sync_service and sync_service.enabled:
                         asyncio.create_task(_sync_user_background(sync_service, user))
 
                     return user
+                else:
+                    logger.warning("[get_current_user_trusted] Provider resolved to None - falling through to generic extraction")
             except HTTPException:
                 raise
             except Exception as e:
-                logger.error(f"Provider-based trusted extraction failed: {e}", exc_info=True)
+                logger.error(f"[get_current_user_trusted] Provider-based trusted extraction failed: {e}", exc_info=True)
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Authentication failed."
                 )
+        else:
+            logger.warning("[get_current_user_trusted] No generic validator available (auth providers table not configured?)")
 
         # No auth providers configured - use standard OIDC claim extraction
-        logger.warning("No auth providers configured for trusted token extraction, using standard OIDC claims")
+        logger.warning("[get_current_user_trusted] Using standard OIDC claim fallback (no provider matched)")
         email = payload.get('email') or payload.get('preferred_username')
         name = payload.get('name') or (
             f"{payload.get('given_name', '')} {payload.get('family_name', '')}"
@@ -263,8 +277,10 @@ async def get_current_user_trusted(
         roles = payload.get('roles', [])
         picture = payload.get('picture')
 
+        logger.debug("[get_current_user_trusted] Using OIDC fallback claim extraction")
+
         if not user_id:
-            logger.warning(f"Missing 'sub' claim in network-validated token for user: {email}")
+            logger.error("[get_current_user_trusted] Missing 'sub' claim in token - returning 401")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid user."
@@ -279,6 +295,8 @@ async def get_current_user_trusted(
             raw_token=token,
         )
 
+        logger.debug("[get_current_user_trusted] User authenticated successfully via OIDC fallback")
+
         # Fire-and-forget sync to Users table
         sync_service = _get_user_sync_service()
         if sync_service and sync_service.enabled:
@@ -287,7 +305,7 @@ async def get_current_user_trusted(
         return user
 
     except jwt.DecodeError as e:
-        logger.error(f"Failed to decode JWT token: {e}")
+        logger.error(f"[get_current_user_trusted] Failed to decode JWT token: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Malformed token."
@@ -295,7 +313,7 @@ async def get_current_user_trusted(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Unexpected error extracting user from token: {e}", exc_info=True)
+        logger.error(f"[get_current_user_trusted] Unexpected error: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication failed."
