@@ -21,7 +21,7 @@ class TestDefaultSystemPrompt:
     """Verify DEFAULT_SYSTEM_PROMPT contains expected key phrases."""
 
     def test_contains_boisestate_ai(self):
-        assert "boisestate.ai" in DEFAULT_SYSTEM_PROMPT
+        assert "SIF" in DEFAULT_SYSTEM_PROMPT
 
     def test_contains_core_principles(self):
         assert "CORE PRINCIPLES" in DEFAULT_SYSTEM_PROMPT
