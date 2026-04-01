@@ -76,11 +76,11 @@ export class ConversationPage implements OnDestroy {
 
   // Greeting message templates (use {name} as placeholder for first name)
   private greetingTemplates = [
-    'How can I help you today, {name}?',
-    'What would you like to know, {name}?',
-    'Ready to assist you, {name}!',
-    'What can I do for you, {name}?',
-    "Let's get started, {name}!",
+    'How can I help you today?',
+    'What would you like to know?',
+    'Ready to assist you!',
+    'What can I do for you?',
+    "Let's get started!",
   ];
 
   // Fallback greetings when user name is not available
